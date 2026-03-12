@@ -16,6 +16,8 @@ static DWORD get_process_id(const wchar_t* process_name) {
 
 		if (_wcsicmp(process_name, entry.szExeFile) == 0) {
 			process_id = entry.th32ProcessID;
+
+		}
 			else {
 				while (Process32NextW(snap_shot, &entry) == TRUE) {
 					if (_wcsicmp(process_name, entry.szExeFile) == 0) {
@@ -25,7 +27,7 @@ static DWORD get_process_id(const wchar_t* process_name) {
 				}
 			}
 
-		}
+	
 
 		
 
@@ -36,7 +38,6 @@ static DWORD get_process_id(const wchar_t* process_name) {
 
 }
 
-
 //create a snapshot of the modules in the process and iterate through them to find the base address of the module we want to inject into
 static std::uintptr_t get_module_base (const DWORD pid, const wchar_t* module_name) {
 	std::uintptr_t module_base = 0;
@@ -45,22 +46,17 @@ static std::uintptr_t get_module_base (const DWORD pid, const wchar_t* module_na
 	if (snap_shot == INVALID_HANDLE_VALUE)
 		return module_base;
 
-	PROCESSENTRY32W entry = {};
-	entry.dwSize = sizeof(decltype(entry));
+	MODULEENTRY32W entry = {};
+	entry.dwSize = sizeof(entry);
 
-	if (Process32FirstW(snap_shot, &entry) == TRUE) {
-		if (_wcsicmp(module_name, entry.szModule) != nullptr)
-			module_base = reinterpret_cast<std::uintptr_t>(entry.modBaseAddr);
-		else {
-			while (Module32NextW(snap_shot, &entry) == TRUE) {
-				if (wsstr(module_name, entry.szModule) != nullptr) {
-					module_base = reinterpret_cast<std::uintptr_t>(entry.modBaseAddr);
-					break;
-				}
+	if (Module32FirstW(snap_shot, &entry) == TRUE) {
+		do {
+			if (_wcsicmp(module_name, entry.szModule) == 0) {
+				module_base = reinterpret_cast<std::uintptr_t>(entry.modBaseAddr);
+				break;
 			}
-		}
-
-		}
+		} while (Module32NextW(snap_shot, &entry) == TRUE);
+	}
 
 	CloseHandle(snap_shot);
 
@@ -105,6 +101,7 @@ namespace driver {
 		//we can change the name of this handle and others but the size and order of this should be the same eg. when i hover HANDLE its size is showing 8 bytes
 
 		//create a attach, read and write functions that we declared before as standalone function in usermode.
+		//for attach memory
 		bool attach_to_process(HANDLE driver_handle, const DWORD pid) {
 			Request r;
 			r.pid = reinterpret_cast<HANDLE>(pid);
@@ -113,11 +110,64 @@ namespace driver {
 
 		}
 
+		//for read memory
+		template <class T>
+		T read_memory(HANDLE driver_handle, const std::uintptr_t addr) {
+			T temp = {};
+
+			Request r;
+			r.target = reinterpret_cast<PVOID>(addr);
+			r.buffer = &temp; //driver will put the result from MMcopyVirtualMemory from kernel driver into temp
+			r.size = sizeof(T);
+
+			return DeviceIoControl(driver_handle, codes::read, &r, sizeof(r), &r, sizeof(r), nullptr, nullptr);
+
+			return temp;
+
+
+		}
+
+		//for write memory
+		template <class T>
+		void write_memory(HANDLE driver_handle, const std::uintptr_t addr, const T& value) {
+			Request r;
+			r.target = reinterpret_cast<PVOID>(addr);
+			r.buffer = (PVOID)&value;
+			r.size = sizeof(T);
+			DeviceIoControl(driver_handle, codes::write, &r, sizeof(r), nullptr, 0, nullptr, nullptr);
+
+			
+		}
+
 	};
 
 
+	//call the notepad for testing
 int main() {
-	std::cout << "exe testing\n";
+	const DWORD pid = get_process_id(L"notepad.exe");
+
+	if (pid == 0) {
+
+		std::cout << "notepad not found\n";
+		std::cin.get();
+		return 1;
+	}
+
+	const HANDLE driver = CreateFile(L"\\\\.\\first_kernel", GENERIC_READ, 0, nullptr, 
+										OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+	if (driver == INVALID_HANDLE_VALUE) {
+		std::cout << "failed to open driver\n";
+		std::cin.get();
+		return 1;
+	}
+
+	if (driver::attach_to_process(driver, pid) == true)
+		std::cout << "{+} Attachment successful \n";
+
+	CloseHandle(driver);
+
+	std::cin.get();
 
 	return 0;
 }
