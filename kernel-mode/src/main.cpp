@@ -1,6 +1,6 @@
-
 #include <ntifs.h>
 
+//source code for kernel mode & user mode application: https://github.com/beans42/kernel-read-write-using-ioctl.git
 
 extern "C" { //undocumented windows api function because this cannot be called with ntifs.h header file we need to declare it here
 	NTKERNELAPI NTSTATUS IoCreateDriver( //IOcreate driver is used make compatable for KDMapper
@@ -21,7 +21,8 @@ void debug_print(PCSTR text) {
 	KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, text));
 
 
-	
+
+
 }
 
 
@@ -56,9 +57,11 @@ namespace driver {
 
 	NTSTATUS create(PDEVICE_OBJECT device_object, PIRP irp) {
 		UNREFERENCED_PARAMETER(device_object);
-		UNREFERENCED_PARAMETER(irp);
+		//UNREFERENCED_PARAMETER(irp);
 
-
+		// Ensure the IRP status/info are set before completion
+		irp->IoStatus.Status = STATUS_SUCCESS; // ensure a defined return status
+		irp->IoStatus.Information = 0;
 		IoCompleteRequest(irp, IO_NO_INCREMENT); //this is used to complete the request and send the response back to user mode
 
 		return irp->IoStatus.Status;
@@ -66,9 +69,11 @@ namespace driver {
 
 	NTSTATUS close(PDEVICE_OBJECT device_object, PIRP irp) {
 		UNREFERENCED_PARAMETER(device_object);
-		UNREFERENCED_PARAMETER(irp);
+		//UNREFERENCED_PARAMETER(irp);
 
-
+		// Ensure the IRP status/info are set before completion
+		irp->IoStatus.Status = STATUS_SUCCESS;
+		irp->IoStatus.Information = 0;
 
 		IoCompleteRequest(irp, IO_NO_INCREMENT); //
 
@@ -77,7 +82,7 @@ namespace driver {
 
 	NTSTATUS device_control(PDEVICE_OBJECT device_object, PIRP irp) { //when we give the argument like attach, read, write it will come here and stored in irp
 		UNREFERENCED_PARAMETER(device_object);
-		UNREFERENCED_PARAMETER(irp);
+		//UNREFERENCED_PARAMETER(irp);
 
 		debug_print("Device control called\n"); //used for our confirmation that this device_control is working
 
@@ -85,12 +90,22 @@ namespace driver {
 
 		PIO_STACK_LOCATION stack_irp = IoGetCurrentIrpStackLocation(irp); //this is used to get the current stack location of the irp and this is used to get the parameters from the user mode
 
-		auto request = reinterpret_cast<Request*>(irp->AssociatedIrp.SystemBuffer); //this is used to get the request and parameters from the user mode
-
-		if (stack_irp == nullptr || request == nullptr) {
+		// Validate stack and buffer early
+		if (stack_irp == nullptr || irp->AssociatedIrp.SystemBuffer == nullptr) {
+			irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+			irp->IoStatus.Information = 0;
 			IoCompleteRequest(irp, IO_NO_INCREMENT);
 			debug_print("Invalid request\n");
-			return status;
+			return irp->IoStatus.Status;
+		}
+
+		auto request = reinterpret_cast<Request*>(irp->AssociatedIrp.SystemBuffer); //this is used to get the request and parameters from the user mode
+		if (request == nullptr) {
+			irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+			irp->IoStatus.Information = 0;
+			IoCompleteRequest(irp, IO_NO_INCREMENT);
+			debug_print("Invalid request pointer\n");
+			return irp->IoStatus.Status;
 		}
 
 		static PEPROCESS target_process = nullptr;
@@ -111,7 +126,6 @@ namespace driver {
 
 
 
-
 		case codes::write:
 			if (target_process != nullptr)
 				status = MmCopyVirtualMemory(target_process, request->target, PsGetCurrentProcess(), request->buffer,
@@ -121,19 +135,20 @@ namespace driver {
 
 		default:
 			debug_print("Invalid control code\n");
+			status = STATUS_INVALID_DEVICE_REQUEST;
 			break;
-
-			irp->IoStatus.Status = status;
-			irp->IoStatus.Information = sizeof(Request);
-
-			IoCompleteRequest(irp, IO_NO_INCREMENT); //
-
-
-			return status;
 		}
 
+		// set IRP status and information and complete the IRP for every path
+		irp->IoStatus.Status = status;
+		irp->IoStatus.Information = sizeof(Request);
+
+		IoCompleteRequest(irp, IO_NO_INCREMENT); //
+
+		return status;
 	}
-}
+
+} // namespace driver
 
 NTSTATUS driver_main(PDRIVER_OBJECT driver_object, PUNICODE_STRING registry_path) {
 	UNREFERENCED_PARAMETER(driver_object);
@@ -185,12 +200,16 @@ NTSTATUS driver_main(PDRIVER_OBJECT driver_object, PUNICODE_STRING registry_path
 
 	return STATUS_SUCCESS;
 
-	
+
 
 }
 
+// corrected DriverEntry signature (previously declared without parameters)
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) { //DriverEntry is the entry point of every kernel mode driver and this is where the driver starts executing when it is loaded into the kernel
+	// Silence C4100 (unreferenced parameter) warnings which are elevated to errors (C2220).
+	UNREFERENCED_PARAMETER(DriverObject);
+	UNREFERENCED_PARAMETER(RegistryPath);
 
-NTSTATUS DriverEntry() { //DriverEntry is the entry point of every kernel mode driver and this is where the driver starts executing when it is loaded into the kernel
 	debug_print("Msg from Kernel!\n");
 
 	//creating a driver object for the driver so that we can interact with it from user mode
