@@ -86,7 +86,7 @@ namespace driver {
 	static bool attach_to_process(HANDLE driver_handle, const DWORD pid) { // changed: moved out of Request (was member function)
 		Request r = {};
 		r.pid = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(pid)); // changed: safer cast (was 'reinterpret_cast<HANDLE>(pid)')
-		BOOL ok = DeviceIoControl(driver_handle, codes::attach, &r, sizeof(r), &r, sizeof(r), nullptr, nullptr);
+		BOOL ok = DeviceIoControl(driver_handle, codes::attach, &r, sizeof(r), &r, sizeof(r), nullptr, nullptr); //this DeviceIoControl will call the kernel driver Device_Control and display "Device control called" msg.
 		return ok == TRUE; // changed: return boolean success (was returning DeviceIoControl result directly)
 	}
 
